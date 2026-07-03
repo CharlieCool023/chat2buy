@@ -1,0 +1,25 @@
+{
+  "name": "whatsapp-autopilot",
+  "version": "1.0.0",
+  "description": "AI-powered WhatsApp sales assistant for small businesses - Qwen Cloud Hackathon",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "db:init": "psql -d autopilot -f schema.sql && psql -d autopilot -f seed.sql",
+    "db:seed": "psql -d autopilot -f seed.sql"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "openai": "^4.52.0",
+    "dotenv": "^16.4.5",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "keywords": ["whatsapp", "ai", "sales", "qwen", "hackathon", "nigeria"],
+  "license": "MIT"
+}
