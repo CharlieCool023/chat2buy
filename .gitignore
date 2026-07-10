@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.log
+whatsapp-autopilot/data/*.json
+whatsapp-autopilot/data/*.json.tmp

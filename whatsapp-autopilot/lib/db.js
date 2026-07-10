@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -76,14 +77,15 @@ export async function getBusinessById(id) {
 }
 
 export async function createBusiness({ name, owner_whatsapp_number, description }) {
-    const code = 'S' + Math.random().toString(36).substring(2, 6).toUpperCase();
-    const setupToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const code = `S${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    const setupToken = `setup-${crypto.randomBytes(4).toString('hex')}-${Date.now().toString(36)}`;
     const business = {
         id: nextId('businesses'),
         name,
         owner_whatsapp_number,
         description: description || '',
         code,
+        category: 'General',
         setup_token: setupToken,
         status: 'pending_setup',
         created_at: new Date().toISOString()
@@ -116,7 +118,7 @@ export async function updateBusiness(businessId, updates = {}) {
     const b = db.businesses.find(b => b.id === Number(businessId));
     if (!b) return null;
 
-    const allowed = ['name', 'description', 'status', 'owner_whatsapp_number'];
+    const allowed = ['name', 'description', 'status', 'owner_whatsapp_number', 'category'];
     for (const key of allowed) {
         if (updates[key] !== undefined) b[key] = updates[key];
     }

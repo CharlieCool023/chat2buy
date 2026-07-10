@@ -32,7 +32,8 @@ export function useApi<T>(endpoint: string) {
 }
 
 export async function apiPost(endpoint: string, token: string | null, body: any) {
-  const res = await fetch(`${endpoint}?token=${token}`, {
+  const separator = endpoint.includes('?') ? '&' : '?'
+  const res = await fetch(`${endpoint}${separator}token=${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -41,7 +42,8 @@ export async function apiPost(endpoint: string, token: string | null, body: any)
 }
 
 export async function apiPut(endpoint: string, token: string | null, body: any) {
-  const res = await fetch(`${endpoint}?token=${token}`, {
+  const separator = endpoint.includes('?') ? '&' : '?'
+  const res = await fetch(`${endpoint}${separator}token=${token}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -50,7 +52,8 @@ export async function apiPut(endpoint: string, token: string | null, body: any) 
 }
 
 export async function apiDelete(endpoint: string, token: string | null) {
-  const res = await fetch(`${endpoint}?token=${token}`, {
+  const separator = endpoint.includes('?') ? '&' : '?'
+  const res = await fetch(`${endpoint}${separator}token=${token}`, {
     method: 'DELETE'
   })
   return res.json()

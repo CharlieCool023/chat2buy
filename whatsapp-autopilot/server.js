@@ -4,6 +4,11 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+if (process.env.ALLOW_SELF_SIGNED_CERTS === 'true') {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    console.warn('[Server] Self-signed certificate checking disabled for development.');
+}
+
 import webhookRoutes from './routes/webhook.js';
 import dashboardApiRoutes from './routes/dashboard-api.js';
 import paystackWebhookRoutes from './routes/paystack-webhook.js';
@@ -77,17 +82,13 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`
-╔══════════════════════════════════════════════════════════╗
-║  🤖 WhatsApp Autopilot — Qwen Cloud Hackathon           ║
-╠══════════════════════════════════════════════════════════╣
-║  Server running on port ${PORT.toString().padEnd(40)}║
-║  Environment: ${(process.env.NODE_ENV || 'development').padEnd(42)}║
-╠══════════════════════════════════════════════════════════╣
-║  Webhook:     POST /webhook                              ║
-║  Dashboard:   /dashboard                                 ║
-║  Health:      GET  /health                               ║
-╚══════════════════════════════════════════════════════════╝
+WhatsApp Autopilot - Qwen Cloud Hackathon
+Server running on port ${PORT}
+Environment: ${process.env.NODE_ENV || 'development'}
+Webhook:   POST /webhook
+Simulator: POST /dev/simulate
+Dashboard: /dashboard
+Health:    GET /health
 `);
 });
-
 export default app;

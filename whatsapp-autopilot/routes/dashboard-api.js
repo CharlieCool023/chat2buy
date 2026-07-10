@@ -1,5 +1,6 @@
 import express from 'express';
 import * as db from '../lib/db.js';
+import * as wa from '../lib/whatsapp.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -224,12 +225,93 @@ router.get('/dashboard/setup', validateSetupToken, async (req, res) => {
             business: {
                 id: req.business.id,
                 name: req.business.name,
-                status: req.business.status
+                status: req.business.status,
+                category: req.business.category
             }
         });
     } catch (err) {
         console.error('[Dashboard] Setup error:', err);
         res.status(500).json({ error: 'Setup validation failed' });
+    }
+});
+
+router.get('/dashboard/onboarding', validateApiKey, async (req, res) => {
+    try {
+        const policy = await db.getPolicy(req.business.id);
+        const catalog = await db.getCatalog(req.business.id);
+        res.json({
+            business: req.business,
+            policy,
+            catalog,
+            onboarding: req.business.status === 'pending_setup'
+        });
+    } catch (err) {
+        console.error('[Dashboard] Onboarding error:', err);
+        res.status(500).json({ error: 'Failed to load onboarding state' });
+    }
+});
+
+router.post('/dashboard/setup/complete', validateApiKey, async (req, res) => {
+    try {
+        const {
+            business_name,
+            description,
+            category,
+            pricing_flexibility,
+            first_item_name,
+            first_item_price,
+            first_item_description,
+            first_item_category
+        } = req.body;
+
+        const businessUpdate = {
+            name: business_name || req.business.name,
+            description: description || req.business.description,
+            category: category || req.business.category || 'General'
+        };
+
+        await db.updateBusiness(req.business.id, businessUpdate);
+
+        const lowerFlex = (pricing_flexibility || 'moderate').toLowerCase();
+        const pricing = {
+            strict: { bulkMinQty: 25, bulkDiscountPct: 7, maxDiscountPct: 2 },
+            moderate: { bulkMinQty: 20, bulkDiscountPct: 10, maxDiscountPct: 3 },
+            flexible: { bulkMinQty: 15, bulkDiscountPct: 12, maxDiscountPct: 5 }
+        }[lowerFlex] || { bulkMinQty: 20, bulkDiscountPct: 10, maxDiscountPct: 3 };
+
+        await db.updatePolicy(req.business.id, {
+            bulkMinQty: pricing.bulkMinQty,
+            bulkDiscountPct: pricing.bulkDiscountPct,
+            maxDiscountPct: pricing.maxDiscountPct,
+            deliveryFee: 1500,
+            pickupAvailable: true,
+            notes: `Pricing flexibility: ${lowerFlex}`
+        });
+
+        if (first_item_name && first_item_price) {
+            await db.addCatalogItem({
+                businessId: req.business.id,
+                name: first_item_name,
+                description: first_item_description || '',
+                category: first_item_category || category || 'General',
+                price: Number(first_item_price),
+                imageUrl: null
+            });
+        }
+
+        await db.updateBusinessStatus(req.business.id, 'live');
+        const updatedBusiness = await db.getBusinessById(req.business.id);
+
+        try {
+            await wa.sendText(req.business.owner_whatsapp_number, `Your store setup is complete. ${updatedBusiness.name} is now live.\n\nGo back to WhatsApp and say hi again so I can welcome you and help you test the shop.`);
+        } catch (err) {
+            console.error('[Dashboard] WhatsApp notification failed:', err.message);
+        }
+
+        res.json({ success: true, business: updatedBusiness });
+    } catch (err) {
+        console.error('[Dashboard] Complete setup error:', err);
+        res.status(500).json({ error: 'Failed to complete setup' });
     }
 });
 

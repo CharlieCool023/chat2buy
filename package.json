@@ -1,0 +1,24 @@
+{
+  "name": "chat2buy-whatsapp-autopilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Track 4 Autopilot Agent for the Qwen Cloud Hackathon: a WhatsApp sales operator for small businesses.",
+  "type": "module",
+  "scripts": {
+    "install:all": "npm --prefix whatsapp-autopilot install && npm --prefix app install",
+    "dev": "npm --prefix whatsapp-autopilot run dev",
+    "start": "npm --prefix whatsapp-autopilot start",
+    "build:dashboard": "npm --prefix app run build && node scripts/copy-dashboard.mjs",
+    "build": "npm run build:dashboard",
+    "check": "node --check whatsapp-autopilot/server.js && node --check whatsapp-autopilot/routes/webhook.js && node --check whatsapp-autopilot/lib/ai.js && npm --prefix app run build"
+  },
+  "keywords": [
+    "qwen",
+    "dashscope",
+    "whatsapp",
+    "autopilot-agent",
+    "alibaba-cloud",
+    "sales-agent"
+  ],
+  "license": "MIT"
+}

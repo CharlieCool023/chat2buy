@@ -22,6 +22,41 @@ router.get('/webhook', (req, res) => {
     return res.sendStatus(403);
 });
 
+router.post('/dev/simulate', express.json(), async (req, res) => {
+    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEV_SIMULATOR !== 'true') {
+        return res.status(404).json({ error: 'Not found' });
+    }
+
+    const from = req.body.from || '2348000000000';
+    const text = req.body.text || '';
+
+    try {
+        const ownerBusiness = await db.getBusinessByOwner(from);
+        if (ownerBusiness) {
+            await handleSellerMessage(from, text, ownerBusiness);
+        } else {
+            const binding = await db.getCustomerBinding(from);
+            if (binding) {
+                await handleCustomerMessage(from, text, binding);
+            } else {
+                await handleNewCustomer(from, text);
+            }
+        }
+
+        res.json({
+            ok: true,
+            from,
+            text,
+            note: process.env.WHATSAPP_DRY_RUN === 'true'
+                ? 'Reply was printed in the server terminal by WHATSAPP_DRY_RUN.'
+                : 'Simulation processed. Set WHATSAPP_DRY_RUN=true to avoid sending real WhatsApp messages.'
+        });
+    } catch (err) {
+        console.error('[Dev simulate] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 router.post('/webhook', express.json(), async (req, res) => {
     res.sendStatus(200);
 
@@ -30,7 +65,7 @@ router.post('/webhook', express.json(), async (req, res) => {
         if (!message) return;
 
         const from = message.from;
-        const text = message.text?.body || '';
+        const text = extractMessageText(message);
         const msgId = message.id;
 
         console.log(`[Webhook] From ${from}: "${text.substring(0, 80)}"`);
@@ -74,15 +109,51 @@ router.post('/webhook', express.json(), async (req, res) => {
 
 async function handleSellerMessage(from, text, business) {
     const lower = text.trim().toLowerCase();
+    const sellerConvo = await db.getConversation(business.id, from);
+    const ctx = sellerConvo.context || {};
+
+    if (ctx.stage === 'awaiting_other_seller_code') {
+        await handleSellerSwitchCode(from, text, business, sellerConvo);
+        return;
+    }
+
+    if (/(buy from another seller|shop elsewhere|different seller|another store|other seller|want another store|buy from another store)/i.test(lower)) {
+        ctx.stage = 'awaiting_other_seller_code';
+        await db.updateConversation(business.id, from, { context: ctx, stage: 'awaiting_other_seller_code' });
+        await wa.sendText(from, 'No wahala. Send the seller code for the store you want to buy from and I will help you switch over.');
+        return;
+    }
 
     // Handle casual conversation for sellers
     if (/^(how.*day|how.*going|how.*are.*you|how.*doing|how.*far)$/i.test(lower)) {
-        await wa.sendText(from, `Thank you for asking! Business is going well. ${business.name} has been serving customers since ${new Date(business.created_at || Date.now()).toLocaleDateString()}. How can I assist you today?`);
+        await wa.sendText(from, `Thank you for asking! ${business.name} is going well. How can I assist you today?`);
         return;
     }
 
     if (/(weather|rain|sun|hot|cold|climate|temperature)/.test(lower)) {
         await wa.sendText(from, `I don't have real-time weather info, but I hope it's treating you well! How is the weather affecting your business today?`);
+        return;
+    }
+
+    if (
+        lower === 'token' ||
+        lower.includes('setup token') ||
+        lower.includes('dashboard token') ||
+        lower.includes('setup link') ||
+        lower.includes('dashboard link') ||
+        lower.includes('remind me of my token')
+    ) {
+        await wa.sendText(from, buildSellerCredentialReminder(business));
+        return;
+    }
+
+    if (
+        lower === 'code' ||
+        lower.includes('seller code') ||
+        lower.includes('sales code') ||
+        lower.includes('store code')
+    ) {
+        await wa.sendText(from, `Your seller code is *${business.code}*. Share it with customers so they can shop from ${business.name}.\n\nIf you need your dashboard token too, type TOKEN.`);
         return;
     }
 
@@ -92,13 +163,7 @@ async function handleSellerMessage(from, text, business) {
         return;
     }
 
-    if (lower === 'code' || lower.includes('seller code')) {
-        await wa.sendText(from, `Your seller code is *${business.code}*. Share it with customers so they can shop from ${business.name}.`);
-        return;
-    }
-
     if (lower === 'test') {
-        await db.getConversation(business.id, from);
         await db.updateConversation(business.id, from, {
             stage: 'greeting',
             context: { is_test: true },
@@ -108,8 +173,7 @@ async function handleSellerMessage(from, text, business) {
         return;
     }
 
-    const convo = await db.getConversation(business.id, from);
-    if (convo.is_test && lower === 'stop') {
+    if (sellerConvo.is_test && lower === 'stop') {
         await db.updateConversation(business.id, from, {
             stage: 'greeting',
             context: {},
@@ -124,7 +188,7 @@ async function handleSellerMessage(from, text, business) {
         return;
     }
 
-    if (convo.is_test) {
+    if (sellerConvo.is_test) {
         await handleCustomerMessage(from, text, {
             business_id: business.id,
             code: business.code,
@@ -144,7 +208,7 @@ async function handleSellerOnboarding(from, text, business) {
         ctx.onboarding_step = 'ask_name';
         ctx.onboarding_data = {};
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, "Welcome. Let's get your AI sales assistant ready.\n\nWhat is your business name?");
+        await wa.sendText(from, "Welcome. Let's prepare your AI store together.\n\nWhat is your business name?");
         return;
     }
 
@@ -153,15 +217,23 @@ async function handleSellerOnboarding(from, text, business) {
         data.name = text.trim();
         ctx.onboarding_step = 'ask_description';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, `Nice. What does *${data.name}* sell? Keep it short.`);
+        await wa.sendText(from, `Nice. What does *${data.name}* sell? Give me a short phrase.`);
         return;
     }
 
     if (ctx.onboarding_step === 'ask_description') {
         data.description = text.trim();
+        ctx.onboarding_step = 'ask_category';
+        await db.updateConversation(business.id, from, { context: ctx });
+        await wa.sendText(from, 'Which market category fits your business best? For example: food, fashion, electronics, or retail.');
+        return;
+    }
+
+    if (ctx.onboarding_step === 'ask_category') {
+        data.category = text.trim() || 'General';
         ctx.onboarding_step = 'ask_flexibility';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendQuickReplies(from, 'How flexible are you on pricing?', [
+        await wa.sendQuickReplies(from, 'How flexible should pricing be for customers?', [
             { title: 'Strict' },
             { title: 'Moderate' },
             { title: 'Flexible' }
@@ -170,20 +242,24 @@ async function handleSellerOnboarding(from, text, business) {
     }
 
     const flex = text.toLowerCase();
-    let maxDiscount = 2;
-    let bulkDiscount = 5;
+    let maxDiscount = 3;
+    let bulkDiscount = 10;
+    let flexLabel = 'moderate';
     if (flex.includes('flexible')) {
         maxDiscount = 5;
-        bulkDiscount = 10;
-    } else if (flex.includes('moderate')) {
-        maxDiscount = 3;
+        bulkDiscount = 12;
+        flexLabel = 'flexible';
+    } else if (flex.includes('strict')) {
+        maxDiscount = 2;
         bulkDiscount = 7;
+        flexLabel = 'strict';
     }
 
     await db.updateBusiness(business.id, {
         name: data.name,
         description: data.description,
-        status: 'live'
+        category: data.category,
+        status: 'pending_setup'
     });
 
     await db.updatePolicy(business.id, {
@@ -192,7 +268,7 @@ async function handleSellerOnboarding(from, text, business) {
         maxDiscountPct: maxDiscount,
         deliveryFee: 1500,
         pickupAvailable: true,
-        notes: `Pricing flexibility: ${flex}`
+        notes: `Pricing flexibility: ${flexLabel}`
     });
 
     const updated = await db.getBusinessById(business.id);
@@ -201,7 +277,20 @@ async function handleSellerOnboarding(from, text, business) {
     await db.updateConversation(business.id, from, { context: ctx });
 
     const dashboardUrl = `${NGROK_URL}/dashboard/setup?token=${updated.setup_token}&biz=${updated.id}`;
-    await wa.sendText(from, `All set.\n\nBusiness: *${updated.name}*\nSeller code: *${updated.code}*\n\nShare this code with customers. Add your menu, prices, and photos here:\n${dashboardUrl}`);
+    await wa.sendText(from,
+        `Great! *${updated.name}* is ready for dashboard setup.\n\nSeller code: *${updated.code}*\nCategory: *${updated.category}*\n\nFinish onboarding here:\n${dashboardUrl}\n\nWhen you're done, return to WhatsApp and say hi so I can welcome you and help you test the store.`
+    );
+}
+
+function buildSellerCredentialReminder(business) {
+    const baseUrl = process.env.DASHBOARD_URL || `${NGROK_URL}/dashboard`;
+    const setupUrl = `${baseUrl.replace(/\/$/, '')}/setup?token=${business.setup_token}&biz=${business.id}`;
+
+    return `Here are your ${business.name} details:\n\n` +
+        `Seller code: *${business.code}*\n` +
+        `Dashboard token: *${business.setup_token}*\n` +
+        `Setup link: ${setupUrl}\n\n` +
+        `Share only the seller code with customers. Keep the dashboard token private.`;
 }
 
 async function handleNewCustomer(from, text) {
@@ -248,6 +337,8 @@ async function handleCustomerMessage(from, text, binding) {
     const policy = await db.getPolicy(businessId) || {};
     const convo = await db.getConversation(businessId, from);
     const lower = text.trim().toLowerCase();
+    const directCodeSwitch = await maybeSwitchCustomerByCode(from, text, businessId);
+    if (directCodeSwitch) return;
 
     if (['confirm', 'yes confirm', 'go ahead', 'pay', 'send payment link', 'i want to pay'].includes(lower)) {
         if (convo.stage === 'confirming' || convo.stage === 'quoting') {
@@ -279,11 +370,20 @@ async function handleCustomerMessage(from, text, binding) {
 
     const history = convo.history || [];
     const messages = [...history.slice(-4), { role: 'user', content: text }];
-    const systemPrompt = ai.buildCustomerPrompt(business, catalog, policy, convo);
-    const aiResponse = await ai.chatWithAI({ systemPrompt, messages, tools: ai.AGENT_TOOLS });
-    const aiMessage = aiResponse.message;
+    const externalContext = await ai.getExternalContext(business);
+    const systemPrompt = ai.buildCustomerPrompt(business, catalog, policy, convo, externalContext);
 
-    if (aiMessage.tool_calls?.length) {
+    let aiMessage;
+    try {
+        const aiResponse = await ai.chatWithAI({ systemPrompt, messages, tools: ai.AGENT_TOOLS });
+        aiMessage = aiResponse.message;
+    } catch (err) {
+        console.error('[Webhook] AI service unavailable:', err.message);
+        await wa.sendText(from, 'No wahala boss — I’m taking a quick rest. Come back in a few minutes and I’ll help you with that.');
+        return;
+    }
+
+    if (aiMessage?.tool_calls?.length) {
         for (const toolCall of aiMessage.tool_calls) {
             const result = await handleToolCall(toolCall, { from, businessId, business, catalog, policy, convo });
             if (result?.reply) await wa.sendText(from, result.reply);
@@ -305,16 +405,14 @@ async function handleCustomerMessage(from, text, binding) {
 }
 
 async function tryFastCustomerReply({ from, text, lower, business, catalog, policy, convo, businessId }) {
-    if (!catalog.length) {
-        await wa.sendText(from, `I do not see any items on ${business.name}'s menu yet. Please check back soon.`);
-        return true;
-    }
-
     // Handle greeting variations
     if (/^(hi|hello|hey|good morning|good afternoon|good evening|good day)\b/.test(lower)) {
-        await wa.sendText(from, `Hello! Welcome to ${business.name}. ${business.description || ''} How can I assist you today?`);
-        await appendHistory(businessId, from, convo, text, '[greeting reply]');
-        return true;
+        if (catalog.length) {
+            await wa.sendText(from, `Hello, welcome to ${business.name}. ${business.description || ''}\n\nTell me what you need today, or ask me for the menu.`);
+            await appendHistory(businessId, from, convo, text, '[greeting reply]');
+            return true;
+        }
+        return false;
     }
 
     // Handle casual conversation about how the day is going
@@ -344,7 +442,7 @@ async function tryFastCustomerReply({ from, text, lower, business, catalog, poli
     }
 
     // Handle menu-related queries
-    if (/(menu|what.*have|available|catalog|list|options|food|sell)/.test(lower)) {
+    if (catalog.length && /(menu|what.*have|available|catalog|list|options|food|sell)/.test(lower)) {
         await sendMenuReply(from, business, catalog);
         await appendHistory(businessId, from, convo, text, '[fast menu reply]');
         return true;
@@ -395,7 +493,29 @@ async function tryFastCustomerReply({ from, text, lower, business, catalog, poli
         return true;
     }
 
+    if (!catalog.length && /(price|cost|how much|order|want|need|sew|make|buy|book|available|catalog|menu|deliver|pickup|measure|material|fabric|style)/.test(lower)) {
+        return false;
+    }
+
     return false;
+}
+
+async function maybeSwitchCustomerByCode(from, text, currentBusinessId) {
+    const raw = text.trim();
+    if (!/^[a-z0-9]{4,12}$/i.test(raw)) return false;
+
+    const targetBusiness = await db.getBusinessByCode(raw.toUpperCase());
+    if (!targetBusiness) return false;
+
+    if (Number(targetBusiness.id) === Number(currentBusinessId)) {
+        await wa.sendText(from, `You are already chatting with *${targetBusiness.name}*.\n\nTell me what you want, or ask for the menu.`);
+        return true;
+    }
+
+    await db.bindCustomerToBusiness(from, targetBusiness.id);
+    await db.getConversation(targetBusiness.id, from);
+    await wa.sendText(from, `Switched you to *${targetBusiness.name}*.\n\n${targetBusiness.description || ''}\n\nYou can ask for the menu, prices, photos, or tell me what you want.`);
+    return true;
 }
 
 async function handleToolCall(toolCall, { from, businessId, business, catalog, policy, convo }) {
@@ -412,9 +532,37 @@ async function handleToolCall(toolCall, { from, businessId, business, catalog, p
             return handleSendImageTool(args, catalog);
         case 'show_menu_list':
             return handleShowMenuTool(args, business, catalog);
+        case 'request_human_checkpoint':
+            return handleHumanCheckpointTool(args, { from, businessId, business, convo });
         default:
             return { reply: 'I am not sure how to do that yet. Can you rephrase?' };
     }
+}
+
+async function handleHumanCheckpointTool(args, { from, businessId, business, convo }) {
+    const ownerMessage = `*Human Checkpoint Needed*\n\n` +
+        `Customer: ${from}\n` +
+        `Reason: ${args.reason}\n\n` +
+        `Request: ${args.customer_summary}\n` +
+        `${args.collected_details ? `Details: ${args.collected_details}\n` : ''}` +
+        `${args.suggested_next_step ? `Suggested next step: ${args.suggested_next_step}\n` : ''}\n\n` +
+        `Reply to the customer directly, or send a price/approval here so the assistant can continue.`;
+
+    await wa.sendText(business.owner_whatsapp_number, ownerMessage);
+
+    const ctx = convo.context || {};
+    ctx.human_checkpoint = {
+        reason: args.reason,
+        customer_summary: args.customer_summary,
+        collected_details: args.collected_details || '',
+        suggested_next_step: args.suggested_next_step || '',
+        created_at: new Date().toISOString()
+    };
+    await db.updateConversation(businessId, from, { context: ctx, stage: 'human_checkpoint' });
+
+    return {
+        reply: `I have the important details now. Let me confirm this with ${business.name}'s owner so I do not misquote you.\n\nI will come back with the right answer shortly.`
+    };
 }
 
 async function handleDiscountTool(args, { from, businessId, business, policy, convo }) {
@@ -681,8 +829,34 @@ function extractDeliveryAddress(text) {
     return match?.[1]?.trim();
 }
 
+async function handleSellerSwitchCode(from, text, business, convo) {
+    const code = text.trim().toUpperCase();
+    const targetStore = await db.getBusinessByCode(code);
+    if (!targetStore || targetStore.id === business.id) {
+        await wa.sendText(from, 'I could not find that seller code. Send a valid code or type a new store name.');
+        return;
+    }
+
+    await wa.sendText(from,
+        `Nice one. I found *${targetStore.name}*. Use the seller code *${targetStore.code}* with the customer flow, or jump back to chat and tell me the item you want from them.`
+    );
+    await db.updateConversation(business.id, from, { context: {}, stage: 'greeting' });
+}
+
 function normalize(text) {
     return (text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractMessageText(message = {}) {
+    if (message.text?.body) return message.text.body;
+    if (message.button?.text) return message.button.text;
+    if (message.interactive?.button_reply?.title) return message.interactive.button_reply.title;
+    if (message.interactive?.button_reply?.id) return message.interactive.button_reply.id;
+    if (message.interactive?.list_reply?.title) return message.interactive.list_reply.title;
+    if (message.interactive?.list_reply?.description) return message.interactive.list_reply.description;
+    if (message.image?.caption) return message.image.caption;
+    if (message.document?.caption) return message.document.caption;
+    return '';
 }
 
 async function appendHistory(businessId, from, convo, userText, assistantText) {
