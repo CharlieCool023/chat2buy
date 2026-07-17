@@ -16,18 +16,18 @@ The project fits Track 4 because it automates a real business workflow end to en
 
 ## Qwen Model Choice
 
-Default model: `qwen3.6-35b-a3b`
+Default model: `qwen3-235b-a22b-instruct-2507`
 
 Why:
 
 - Alibaba Cloud Model Studio lists Qwen models for text generation and recommends choosing between capability and cost.
-- The Qwen pricing page shows `qwen3.6-35b-a3b` has a 1 million token free quota in the international service deployment scope, valid for 90 days after activating Model Studio.
+- Alibaba Cloud Model Studio bills `qwen3-235b-a22b-instruct-2507` by tokens; your hackathon coupon should cover normal demo usage, but monitor billing.
 - It is a better default for natural sales reasoning than the previous `qwen3-coder-plus` default, which was optimized for coding instead of customer conversation.
 
 You can switch models through:
 
 ```bash
-AI_MODEL=qwen3.6-35b-a3b
+AI_MODEL=qwen3-235b-a22b-instruct-2507
 ```
 
 Cost-saving fallback:
@@ -36,7 +36,7 @@ Cost-saving fallback:
 AI_MODEL=qwen-turbo
 ```
 
-Alibaba recommends moving away from older Turbo toward Flash for many use cases, but `qwen-turbo` is still documented with a free quota. Use `qwen3.6-35b-a3b` for the hackathon demo quality unless quota becomes tight.
+Alibaba recommends moving away from older Turbo toward Flash for many use cases, but `qwen-turbo` is still documented with a free quota. Use `qwen3-235b-a22b-instruct-2507` for the hackathon demo quality while your coupon covers usage.
 
 ## Architecture
 
@@ -116,7 +116,7 @@ Set at least:
 
 ```bash
 DASHSCOPE_API_KEY=your_qwen_model_studio_key
-AI_MODEL=qwen3.6-35b-a3b
+AI_MODEL=qwen3-235b-a22b-instruct-2507
 WHATSAPP_DRY_RUN=true
 ENABLE_DEV_SIMULATOR=true
 PORT=3000

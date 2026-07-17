@@ -8,7 +8,14 @@ import * as paystack from '../lib/paystack.js';
 const router = express.Router();
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const NGROK_URL = process.env.NGROK_URL || 'http://localhost:3000';
+const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || process.env.DASHBOARD_URL || process.env.NGROK_URL || 'http://localhost:3000').replace(/\/dashboard\/?$/, '').replace(/\/$/, '');
 const escalationBuffer = new Map();
+
+const PLATFORM_INTRO = `Hi, welcome to *Chat2Buy*.
+
+I help you shop from businesses on WhatsApp, or set up your own AI sales assistant if you sell something.
+
+If you have a seller code, send it here. If you want to create your own store, type *SELL*.`;
 
 router.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -47,6 +54,7 @@ router.post('/dev/simulate', express.json(), async (req, res) => {
             ok: true,
             from,
             text,
+            replies: process.env.WHATSAPP_DRY_RUN === 'true' ? wa.drainDryRunOutbox(from) : undefined,
             note: process.env.WHATSAPP_DRY_RUN === 'true'
                 ? 'Reply was printed in the server terminal by WHATSAPP_DRY_RUN.'
                 : 'Simulation processed. Set WHATSAPP_DRY_RUN=true to avoid sending real WhatsApp messages.'
@@ -208,7 +216,11 @@ async function handleSellerOnboarding(from, text, business) {
         ctx.onboarding_step = 'ask_name';
         ctx.onboarding_data = {};
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, "Welcome. Let's prepare your AI store together.\n\nWhat is your business name?");
+        await wa.sendText(from, `Welcome to *Chat2Buy*. Nice move.
+
+I will help you set up a WhatsApp sales assistant that can talk to customers, recommend products or services, negotiate within your rules, and hand orders back to you when needed.
+
+What is your business name?`);
         return;
     }
 
@@ -217,15 +229,26 @@ async function handleSellerOnboarding(from, text, business) {
         data.name = text.trim();
         ctx.onboarding_step = 'ask_description';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, `Nice. What does *${data.name}* sell? Give me a short phrase.`);
+        await wa.sendText(from, `Nice, *${data.name}*.
+
+What do you sell or what service do you offer? You can answer naturally, like "I am a tailor", "we sell shoes and bags", or "we cook party food".`);
         return;
     }
 
     if (ctx.onboarding_step === 'ask_description') {
-        data.description = text.trim();
-        ctx.onboarding_step = 'ask_category';
+        const description = cleanBusinessDescription(text);
+        data.description = description;
+        data.category = inferOnboardingCategory(description);
+        ctx.onboarding_step = 'ask_flexibility';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, 'Which market category fits your business best? For example: food, fashion, electronics, or retail.');
+        await wa.sendText(from, `Got it. I will set this up as *${data.category}*.
+
+How flexible should pricing be with customers?`);
+        await wa.sendQuickReplies(from, 'Choose the style that matches how you sell:', [
+            { title: 'Strict' },
+            { title: 'Moderate' },
+            { title: 'Flexible' }
+        ]);
         return;
     }
 
@@ -276,14 +299,14 @@ async function handleSellerOnboarding(from, text, business) {
     ctx.onboarding_data = null;
     await db.updateConversation(business.id, from, { context: ctx });
 
-    const dashboardUrl = `${NGROK_URL}/dashboard/setup?token=${updated.setup_token}&biz=${updated.id}`;
+    const dashboardUrl = `${APP_PUBLIC_URL}/dashboard/setup?token=${updated.setup_token}&biz=${updated.id}`;
     await wa.sendText(from,
         `Great! *${updated.name}* is ready for dashboard setup.\n\nSeller code: *${updated.code}*\nCategory: *${updated.category}*\n\nFinish onboarding here:\n${dashboardUrl}\n\nWhen you're done, return to WhatsApp and say hi so I can welcome you and help you test the store.`
     );
 }
 
 function buildSellerCredentialReminder(business) {
-    const baseUrl = process.env.DASHBOARD_URL || `${NGROK_URL}/dashboard`;
+    const baseUrl = process.env.DASHBOARD_URL || `${APP_PUBLIC_URL}/dashboard`;
     const setupUrl = `${baseUrl.replace(/\/$/, '')}/setup?token=${business.setup_token}&biz=${business.id}`;
 
     return `Here are your ${business.name} details:\n\n` +
@@ -291,6 +314,38 @@ function buildSellerCredentialReminder(business) {
         `Dashboard token: *${business.setup_token}*\n` +
         `Setup link: ${setupUrl}\n\n` +
         `Share only the seller code with customers. Keep the dashboard token private.`;
+}
+
+function cleanBusinessDescription(text = '') {
+    return text
+        .trim()
+        .replace(/^i\s*(am|'m)\s+(a|an)\s+/i, '')
+        .replace(/^we\s+(are|sell|make|do)\s+/i, '')
+        .replace(/^i\s+(sell|make|do|sew)\s+/i, '')
+        .trim() || text.trim();
+}
+
+function inferOnboardingCategory(text = '') {
+    const lower = text.toLowerCase();
+    if (/(tailor|sew|sewing|fashion designer|dress|gown|kaftan|agbada|alteration)/.test(lower)) return 'Tailoring';
+    if (/(food|restaurant|rice|soup|catering|small chops|drink|kitchen)/.test(lower)) return 'Food';
+    if (/(shoe|bag|clothes|boutique|wear|thrift|fashion)/.test(lower)) return 'Fashion retail';
+    if (/(phone|laptop|electronics?|gadget|accessor)/.test(lower)) return 'Electronics';
+    if (/(hair|makeup|beauty|salon|nail|spa)/.test(lower)) return 'Beauty';
+    if (/(event|rental|decoration|planner|usher)/.test(lower)) return 'Events and rentals';
+    if (/(consult|service|repair|cleaning|training|class)/.test(lower)) return 'Professional services';
+    return 'General';
+}
+
+function isPlatformQuestion(lower = '') {
+    return /(what.*(this|platform|about)|who.*you|what.*do.*you.*do|how.*does.*this.*work|chat2buy|explain)/.test(lower);
+}
+
+function looksLikeSellerCode(text = '') {
+    const value = text.trim();
+    if (!/^[a-z0-9]{4,12}$/i.test(value)) return false;
+    if (/^(sell|help|hello|hi|hey|menu|price|order)$/i.test(value)) return false;
+    return /[a-z]/i.test(value) && (/\d/.test(value) || value.length >= 5);
 }
 
 async function handleNewCustomer(from, text) {
@@ -305,6 +360,11 @@ async function handleNewCustomer(from, text) {
         return;
     }
 
+    if (isPlatformQuestion(lower) || /^(hi|hello|hey|good morning|good afternoon|good evening|good day)\b/.test(lower)) {
+        await wa.sendText(from, PLATFORM_INTRO);
+        return;
+    }
+
     if (lower === 'sell' || lower.includes('set up') || lower.includes('become a seller')) {
         const newBiz = await db.createBusiness({
             name: 'New Business',
@@ -316,18 +376,33 @@ async function handleNewCustomer(from, text) {
         return;
     }
 
+    if (looksLikeSellerCode(text)) {
+        await wa.sendText(from, `I could not find that seller code on Chat2Buy.
+
+Please recheck the code and send it again. If you want to set up your own store instead, type *SELL*.`);
+        return;
+    }
+
     // Handle casual conversation for new customers
     if (/^(how.*day|how.*going|how.*are.*you|how.*doing|how.*far)$/i.test(lower)) {
-        await wa.sendText(from, `Hello! Thank you for reaching out. You can start shopping by entering a seller code, or set up your own store by typing SELL. How can I assist you today?`);
+        await wa.sendText(from, `I am doing well, thank you. Welcome to Chat2Buy.
+
+You can send a seller code to shop from a business, or type *SELL* if you want me to set up your own AI sales assistant.`);
         return;
     }
 
     if (/(weather|rain|sun|hot|cold|climate|temperature)/.test(lower)) {
-        await wa.sendText(from, `I don't have real-time weather info, but I hope it's treating you well! You can start shopping by entering a seller code, or set up your own store by typing SELL.`);
+        await wa.sendText(from, `I may not have your live weather from here, but I hope the day is treating you well.
+
+This is Chat2Buy. Send a seller code to shop, or type *SELL* to create your own store assistant.`);
         return;
     }
 
-    await wa.sendText(from, 'Welcome. Enter a seller code to start shopping, or type SELL to set up your own store.');
+    await wa.sendText(from, `I hear you.
+
+This is *Chat2Buy*, a WhatsApp platform for buying from stores and setting up AI sales assistants for businesses.
+
+Send a seller code if you have one, or type *SELL* to create your own store.`);
 }
 
 async function handleCustomerMessage(from, text, binding) {

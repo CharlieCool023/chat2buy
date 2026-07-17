@@ -7,7 +7,7 @@ const AI_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
 if (!AI_API_KEY) {
     console.warn('[AI] Warning: No Dashscope API key configured. Set DASHSCOPE_API_KEY.');
 }
-console.log('[AI] provider: dashscope', 'model:', process.env.AI_MODEL || 'qwen3-coder-plus', 'baseURL:', AI_BASE_URL);
+console.log('[AI] provider: dashscope', 'model:', process.env.AI_MODEL || 'qwen3-235b-a22b-instruct-2507', 'baseURL:', AI_BASE_URL);
 
 const WEATHER_API_KEY = process.env.WEATHER_API_KEY;
 const WEATHER_LOCATION = process.env.WEATHER_LOCATION;
@@ -17,7 +17,8 @@ const aiClient = new OpenAI({
     baseURL: AI_BASE_URL,
 });
 
-const REASONING_MODEL = process.env.AI_MODEL || 'qwen3.6-35b-a3b';
+const REASONING_MODEL = process.env.AI_MODEL || 'qwen3-235b-a22b-instruct-2507';
+const ENABLE_MODEL_THINKING = process.env.AI_ENABLE_THINKING === 'true';
 
 function inferBusinessMode(business = {}, catalog = []) {
     const text = `${business.category || ''} ${business.description || ''} ${catalog.map(i => `${i.name} ${i.category}`).join(' ')}`.toLowerCase();
@@ -300,6 +301,10 @@ export async function chatWithAI({ systemPrompt, messages, tools, model = REASON
         max_tokens: 280,
     };
 
+    if (!ENABLE_MODEL_THINKING) {
+        params.extra_body = { enable_thinking: false };
+    }
+
     if (tools?.length) {
         params.tools = tools;
         params.tool_choice = 'auto';
@@ -337,6 +342,7 @@ export async function classifyIntent(text) {
             ],
             temperature: 0,
             max_tokens: 8,
+            extra_body: { enable_thinking: false },
         });
         return response.choices[0].message.content.trim().toLowerCase();
     } catch (err) {
@@ -355,6 +361,7 @@ export async function simpleReply(systemPrompt, userText) {
             ],
             temperature: 0.75,
             max_tokens: 220,
+            extra_body: { enable_thinking: false },
         });
         return response.choices[0].message.content;
     } catch (err) {

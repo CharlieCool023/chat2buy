@@ -15,13 +15,15 @@ Set these on the Alibaba runtime:
 NODE_ENV=production
 PORT=3000
 DASHSCOPE_API_KEY=your_model_studio_key
-AI_MODEL=qwen3.6-35b-a3b
+AI_MODEL=qwen3-235b-a22b-instruct-2507
+AI_ENABLE_THINKING=false
 WHATSAPP_ACCESS_TOKEN=your_meta_token
 WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
 WHATSAPP_VERIFY_TOKEN=your_verify_token
 GRAPH_API_VERSION=v21.0
 PAYSTACK_SECRET_KEY=your_paystack_test_or_live_key
 PAYSTACK_CALLBACK_URL=https://your-alibaba-domain/webhook/paystack
+APP_PUBLIC_URL=https://your-alibaba-domain
 NGROK_URL=https://your-alibaba-domain
 DASHBOARD_URL=https://your-alibaba-domain/dashboard
 WHATSAPP_DRY_RUN=false

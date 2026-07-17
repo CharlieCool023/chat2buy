@@ -8,6 +8,22 @@ const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const BASE_URL = `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}`;
 const DRY_RUN = process.env.WHATSAPP_DRY_RUN === 'true';
+const dryRunOutbox = [];
+
+function recordDryRunMessage(message) {
+    dryRunOutbox.push({ ...message, at: new Date().toISOString() });
+    while (dryRunOutbox.length > 50) dryRunOutbox.shift();
+}
+
+export function drainDryRunOutbox(to) {
+    const matches = [];
+    for (let i = dryRunOutbox.length - 1; i >= 0; i--) {
+        if (!to || dryRunOutbox[i].to === to) {
+            matches.unshift(dryRunOutbox.splice(i, 1)[0]);
+        }
+    }
+    return matches;
+}
 
 function assertWhatsAppConfigured() {
     if (DRY_RUN) return;
@@ -23,6 +39,7 @@ export async function sendText(to, body) {
     try {
         if (DRY_RUN) {
             console.log(`[WhatsApp:dry-run] text to ${to}: ${body}`);
+            recordDryRunMessage({ to, type: 'text', body });
             return { dry_run: true, to, type: 'text', body };
         }
         assertWhatsAppConfigured();
@@ -58,6 +75,7 @@ export async function sendImage(to, imageUrl, caption = '') {
     try {
         if (DRY_RUN) {
             console.log(`[WhatsApp:dry-run] image to ${to}: ${imageUrl} ${caption}`);
+            recordDryRunMessage({ to, type: 'image', imageUrl, caption });
             return { dry_run: true, to, type: 'image', imageUrl, caption };
         }
         assertWhatsAppConfigured();
@@ -96,6 +114,7 @@ export async function sendQuickReplies(to, body, replies) {
     try {
         if (DRY_RUN) {
             console.log(`[WhatsApp:dry-run] quick replies to ${to}: ${body} ${JSON.stringify(replies)}`);
+            recordDryRunMessage({ to, type: 'quick_replies', body, replies });
             return { dry_run: true, to, type: 'quick_replies', body, replies };
         }
         assertWhatsAppConfigured();
@@ -140,6 +159,7 @@ export async function sendList(to, header, body, items) {
     try {
         if (DRY_RUN) {
             console.log(`[WhatsApp:dry-run] list to ${to}: ${header} ${body} ${JSON.stringify(items)}`);
+            recordDryRunMessage({ to, type: 'list', header, body, items });
             return { dry_run: true, to, type: 'list', header, body, items };
         }
         assertWhatsAppConfigured();
