@@ -202,6 +202,24 @@ export async function getCustomerBinding(customerNumber) {
     };
 }
 
+export async function getCustomerBindings(customerNumber) {
+    const bindings = db.customer_bindings.filter(cb => cb.customer_number === customerNumber);
+    const result = [];
+    for (const binding of bindings) {
+        const business = db.businesses.find(b => b.id === binding.business_id);
+        if (business) {
+            result.push({
+                ...binding,
+                business_name: business.name,
+                code: business.code,
+                description: business.description,
+                owner_whatsapp_number: business.owner_whatsapp_number
+            });
+        }
+    }
+    return result.sort((a, b) => new Date(b.last_interaction_at) - new Date(a.last_interaction_at));
+}
+
 export async function bindCustomerToBusiness(customerNumber, businessId) {
     const existing = db.customer_bindings.find(
         cb => cb.customer_number === customerNumber && cb.business_id === Number(businessId)

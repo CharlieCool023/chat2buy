@@ -8,14 +8,50 @@ import * as paystack from '../lib/paystack.js';
 const router = express.Router();
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const NGROK_URL = process.env.NGROK_URL || 'http://localhost:3000';
-const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || process.env.DASHBOARD_URL || process.env.NGROK_URL || 'http://localhost:3000').replace(/\/dashboard\/?$/, '').replace(/\/$/, '');
+const APP_PUBLIC_URL = getPublicAppUrl();
 const escalationBuffer = new Map();
 
-const PLATFORM_INTRO = `Hi, welcome to *Chat2Buy*.
+const PLATFORM_INTRO = `Hi, I am *Charlotte* from *Chat2Buy*!
 
-I help you shop from businesses on WhatsApp, or set up your own AI sales assistant if you sell something.
+I can help you shop from businesses on WhatsApp, or set up your own AI sales assistant if you sell something.
 
 If you have a seller code, send it here. If you want to create your own store, type *SELL*.`;
+
+function getPublicAppUrl() {
+    const candidates = [
+        process.env.APP_PUBLIC_URL,
+        process.env.DASHBOARD_URL,
+        process.env.NGROK_URL,
+        process.env.PUBLIC_URL,
+        'http://localhost:3000'
+    ];
+
+    for (const candidate of candidates) {
+        const clean = normalizePublicUrl(candidate);
+        if (clean) return clean;
+    }
+
+    return 'http://localhost:3000';
+}
+
+function normalizePublicUrl(value = '') {
+    let url = String(value || '').trim();
+    if (!url) return '';
+
+    const protocolIndex = url.search(/https?:\/\//i);
+    if (protocolIndex > 0) url = url.slice(protocolIndex);
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+
+    try {
+        const parsed = new URL(url);
+        parsed.hash = '';
+        parsed.search = '';
+        parsed.pathname = parsed.pathname.replace(/\/dashboard\/?$/i, '').replace(/\/+$/, '');
+        return parsed.toString().replace(/\/$/, '');
+    } catch {
+        return '';
+    }
+}
 
 router.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -149,7 +185,9 @@ async function handleSellerMessage(from, text, business) {
         lower.includes('dashboard token') ||
         lower.includes('setup link') ||
         lower.includes('dashboard link') ||
-        lower.includes('remind me of my token')
+        lower.includes('remind me of my token') ||
+        lower.includes('access the link') ||
+        lower.includes('open the link')
     ) {
         await wa.sendText(from, buildSellerCredentialReminder(business));
         return;
@@ -211,6 +249,7 @@ async function handleSellerMessage(from, text, business) {
 async function handleSellerOnboarding(from, text, business) {
     const convo = await db.getConversation(business.id, from);
     const ctx = convo.context || {};
+    const lower = text.trim().toLowerCase();
 
     if (!ctx.onboarding_step) {
         ctx.onboarding_step = 'ask_name';
@@ -224,8 +263,35 @@ What is your business name?`);
         return;
     }
 
+    if (isOnboardingCancel(lower)) {
+        await db.updateConversation(business.id, from, { context: {}, stage: 'greeting' });
+        await wa.sendText(from, `No problem, I have paused the setup.
+
+When you are ready, type *SELL* or *SETUP* and I will continue from the beginning. If you already have a store, you can ask me for your seller code or dashboard token.`);
+        return;
+    }
+
+    if (isOnboardingHelp(lower)) {
+        await wa.sendText(from, buildOnboardingHelp(ctx.onboarding_step));
+        return;
+    }
+
+    if (lower === 'back') {
+        rewindOnboardingStep(ctx);
+        await db.updateConversation(business.id, from, { context: ctx });
+        await wa.sendText(from, buildOnboardingStepPrompt(ctx));
+        return;
+    }
+
     const data = ctx.onboarding_data;
     if (ctx.onboarding_step === 'ask_name') {
+        if (!isLikelyBusinessName(text)) {
+            await wa.sendText(from, `I do not want to save that as your business name.
+
+Please send the name customers know you by, like "Charlie the Tailor" or "CBD Stores". You can also type *cancel* to pause setup.`);
+            return;
+        }
+
         data.name = text.trim();
         ctx.onboarding_step = 'ask_description';
         await db.updateConversation(business.id, from, { context: ctx });
@@ -237,6 +303,13 @@ What do you sell or what service do you offer? You can answer naturally, like "I
 
     if (ctx.onboarding_step === 'ask_description') {
         const description = cleanBusinessDescription(text);
+        if (!isUsefulBusinessDescription(description)) {
+            await wa.sendText(from, `I need the actual thing you sell or the service you offer.
+
+For example: "I am a tailor", "we sell shoes and bags", "phone accessories", or "event catering".`);
+            return;
+        }
+
         data.description = description;
         data.category = inferOnboardingCategory(description);
         ctx.onboarding_step = 'ask_flexibility';
@@ -265,6 +338,17 @@ How flexible should pricing be with customers?`);
     }
 
     const flex = text.toLowerCase();
+    if (!/(strict|moderate|flexible)/.test(flex)) {
+        await wa.sendText(from, `For pricing, choose one of these:
+
+*Strict* - small or no discounts.
+*Moderate* - balanced negotiation.
+*Flexible* - more room to close sales.
+
+Which one should Charlotte use?`);
+        return;
+    }
+
     let maxDiscount = 3;
     let bulkDiscount = 10;
     let flexLabel = 'moderate';
@@ -313,7 +397,73 @@ function buildSellerCredentialReminder(business) {
         `Seller code: *${business.code}*\n` +
         `Dashboard token: *${business.setup_token}*\n` +
         `Setup link: ${setupUrl}\n\n` +
-        `Share only the seller code with customers. Keep the dashboard token private.`;
+        `Tap the setup link to open your dashboard. If WhatsApp does not open it, copy the full link into Chrome or Safari.
+
+Share only the seller code with customers. Keep the dashboard token private.`;
+}
+
+function isOnboardingCancel(lower = '') {
+    return /^(cancel|stop|quit|exit|pause|not now|never mind|nevermind|forget it|start over|restart)$/i.test(lower) ||
+        /\b(cancel|stop setup|pause setup|quit setup|not now)\b/i.test(lower);
+}
+
+function isOnboardingHelp(lower = '') {
+    return /^(help|what now|what should i do|how does this work|explain)$/i.test(lower);
+}
+
+function isLikelyBusinessName(text = '') {
+    const value = text.trim();
+    if (value.length < 2 || value.length > 80) return false;
+    if (isOnboardingCancel(value.toLowerCase()) || isOnboardingHelp(value.toLowerCase())) return false;
+    if (/^(hi|hello|hey|yes|no|ok|okay|thanks?|thank you|sell|setup)$/i.test(value)) return false;
+    return /[a-z0-9]/i.test(value);
+}
+
+function isUsefulBusinessDescription(text = '') {
+    const value = text.trim();
+    if (value.length < 3 || value.length > 180) return false;
+    if (isOnboardingCancel(value.toLowerCase()) || isOnboardingHelp(value.toLowerCase())) return false;
+    if (/^(yes|no|ok|okay|same|business|store|shop)$/i.test(value)) return false;
+    return /[a-z]/i.test(value);
+}
+
+function rewindOnboardingStep(ctx) {
+    if (ctx.onboarding_step === 'ask_description') {
+        ctx.onboarding_step = 'ask_name';
+        delete ctx.onboarding_data?.name;
+    } else if (ctx.onboarding_step === 'ask_category' || ctx.onboarding_step === 'ask_flexibility') {
+        ctx.onboarding_step = 'ask_description';
+        delete ctx.onboarding_data?.description;
+        delete ctx.onboarding_data?.category;
+    } else {
+        ctx.onboarding_step = 'ask_name';
+        ctx.onboarding_data = {};
+    }
+}
+
+function buildOnboardingStepPrompt(ctx = {}) {
+    const data = ctx.onboarding_data || {};
+    if (ctx.onboarding_step === 'ask_name') return 'Sure, let us take that again. What is your business name?';
+    if (ctx.onboarding_step === 'ask_description') {
+        return `No problem. What does *${data.name || 'your business'}* sell or what service do you offer?`;
+    }
+    return 'How flexible should pricing be with customers: Strict, Moderate, or Flexible?';
+}
+
+function buildOnboardingHelp(step) {
+    if (step === 'ask_name') {
+        return `I am setting up your Chat2Buy store.
+
+Send your business name, the way customers know it. Example: "Charlie the Tailor".`;
+    }
+    if (step === 'ask_description') {
+        return `Tell me what you sell or the service you offer.
+
+You can answer naturally, like "I am a tailor", "we sell shoes and bags", or "we cook party food".`;
+    }
+    return `Choose how Charlotte should negotiate:
+
+*Strict* for firm prices, *Moderate* for balanced offers, or *Flexible* when you want more room to close sales.`;
 }
 
 function cleanBusinessDescription(text = '') {
@@ -434,7 +584,6 @@ async function handleCustomerMessage(from, text, binding) {
     if (/(switch|change seller|new seller|different store|shop somewhere else)/.test(lower)) {
         await db.touchCustomerBinding(from, businessId);
         await wa.sendText(from, `Sure, you can switch to shop with a different seller. Enter another seller code, or type SELL to set up your own store.`);
-        await appendHistory(businessId, from, convo, text, '[switch seller requested]');
         return;
     }
 
@@ -446,7 +595,8 @@ async function handleCustomerMessage(from, text, binding) {
     const history = convo.history || [];
     const messages = [...history.slice(-4), { role: 'user', content: text }];
     const externalContext = await ai.getExternalContext(business);
-    const systemPrompt = ai.buildCustomerPrompt(business, catalog, policy, convo, externalContext);
+    const previousSellers = await db.getCustomerBindings(from);
+    const systemPrompt = ai.buildCustomerPrompt(business, catalog, policy, convo, externalContext, previousSellers);
 
     let aiMessage;
     try {
@@ -454,7 +604,7 @@ async function handleCustomerMessage(from, text, binding) {
         aiMessage = aiResponse.message;
     } catch (err) {
         console.error('[Webhook] AI service unavailable:', err.message);
-        await wa.sendText(from, 'No wahala boss — I’m taking a quick rest. Come back in a few minutes and I’ll help you with that.');
+        await wa.sendText(from, 'No wahala boss - I am taking a quick rest. Come back in a few minutes and I will help you with that.');
         return;
     }
 
@@ -471,7 +621,7 @@ async function handleCustomerMessage(from, text, binding) {
         return;
     }
 
-    if (aiMessage.content) {
+    if (aiMessage?.content) {
         await wa.sendText(from, aiMessage.content);
         history.push({ role: 'user', content: text });
         history.push({ role: 'assistant', content: aiMessage.content });
@@ -609,9 +759,20 @@ async function handleToolCall(toolCall, { from, businessId, business, catalog, p
             return handleShowMenuTool(args, business, catalog);
         case 'request_human_checkpoint':
             return handleHumanCheckpointTool(args, { from, businessId, business, convo });
+        case 'switch_to_store':
+            return handleSwitchStoreTool(args, { from, businessId });
         default:
             return { reply: 'I am not sure how to do that yet. Can you rephrase?' };
     }
+}
+
+async function handleSwitchStoreTool(args, { from, businessId }) {
+    const switched = await maybeSwitchCustomerByCode(from, args.store_code || '', businessId);
+    if (switched) return {};
+
+    return {
+        reply: `I could not find that seller code on Chat2Buy. Please recheck it and send it again.`
+    };
 }
 
 async function handleHumanCheckpointTool(args, { from, businessId, business, convo }) {
