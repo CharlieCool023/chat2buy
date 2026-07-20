@@ -215,7 +215,23 @@ async function handleSellerMessage(from, text, business) {
             context: { is_test: true },
             is_test: true
         });
-        await wa.sendText(from, '*Test Mode* is on.\n\nI will respond like I would to a real customer. Try "hi" or "what do you have?"\n\nType STOP to end test mode.');
+        
+        try {
+            const reply = await ai.simpleReply(
+                `You are Charlotte! You just turned on Test Mode for the seller!
+                Keep it friendly and excited!
+                Tell them Test Mode is ON!
+                Tell them you'll respond like a real customer!
+                Give them ideas: try "hi" or "what do you have?"
+                Tell them to type STOP to end test mode!
+                Keep it short! 1 emoji max!`,
+                ''
+            );
+            await wa.sendText(from, reply);
+        } catch (err) {
+            await wa.sendText(from, '*Test Mode* is ON! I will respond like a real customer! Try "hi"! Type STOP to end!');
+        }
+        
         return;
     }
 
@@ -243,7 +259,21 @@ async function handleSellerMessage(from, text, business) {
         return;
     }
 
-    await wa.sendText(from, `Hi boss. ${business.name} is live.\n\nYou can ask me "any recent orders?", "orders today", "orders this week", "give me 10 orders", or "how is business going?".\n\nType TEST to try the customer flow. Your seller code is *${business.code}*.`);
+    try {
+        const reply = await ai.simpleReply(
+            `You are Charlotte, chatting with the business owner of ${business.name} (seller code: ${business.code})!
+            The store is live!
+            Keep it friendly, casual (light Nigerian Pidgin allowed).
+            Give a warm welcome!
+            Tell them they can ask about orders, analytics, etc.
+            Remind them they can type TEST to try the customer flow!
+            Keep it short! 1 emoji max!`,
+            ''
+        );
+        await wa.sendText(from, reply);
+    } catch (err) {
+        await wa.sendText(from, `Hi boss! ${business.name} is live! Type TEST to try the customer flow! Your seller code is *${business.code}*!`);
+    }
 }
 
 async function handleSellerOnboarding(from, text, business) {
@@ -255,11 +285,21 @@ async function handleSellerOnboarding(from, text, business) {
         ctx.onboarding_step = 'ask_name';
         ctx.onboarding_data = {};
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, `Welcome to *Chat2Buy*. Nice move.
-
-I will help you set up a WhatsApp sales assistant that can talk to customers, recommend products or services, negotiate within your rules, and hand orders back to you when needed.
-
-What is your business name?`);
+        
+        try {
+            const welcomeReply = await ai.simpleReply(
+                `You are Charlotte, welcoming a new seller to Chat2Buy! 😊
+                Keep it warm, friendly, casual (light Nigerian Pidgin allowed).
+                Keep messages short (1-3 WhatsApp-style sentences, 1 emoji max).
+                Then ask them for their business name.`,
+                ''
+            );
+            await wa.sendText(from, welcomeReply);
+        } catch (err) {
+            console.error('[Onboarding AI error]', err);
+            await wa.sendText(from, `Welcome to *Chat2Buy*. Nice move! What is your business name?`);
+        }
+        
         return;
     }
 
@@ -285,28 +325,42 @@ When you are ready, type *SELL* or *SETUP* and I will continue from the beginnin
 
     const data = ctx.onboarding_data;
     if (ctx.onboarding_step === 'ask_name') {
+        const processedName = text.trim();
         if (!isLikelyBusinessName(text)) {
-            await wa.sendText(from, `I do not want to save that as your business name.
-
-Please send the name customers know you by, like "Charlie the Tailor" or "CBD Stores". You can also type *cancel* to pause setup.`);
+            try {
+                const prompt = `You're Charlotte helping a new seller! They didn't give a valid business name. Ask them again nicely for the business name (the one customers know them by), in a friendly way! Keep it short!`;
+                const reply = await ai.simpleReply(prompt, text);
+                await wa.sendText(from, reply);
+            } catch (err) {
+                await wa.sendText(from, `Please give me your actual business name, like "Charlie the Tailor"!`);
+            }
             return;
         }
 
-        data.name = text.trim();
+        data.name = processedName;
         ctx.onboarding_step = 'ask_description';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, `Nice, *${data.name}*.
-
-What do you sell or what service do you offer? You can answer naturally, like "I am a tailor", "we sell shoes and bags", or "we cook party food".`);
+        
+        try {
+            const reply = await ai.simpleReply(ai.buildSellerOnboardingPrompt('ask_description', data, business), text);
+            await wa.sendText(from, reply);
+        } catch (err) {
+            await wa.sendText(from, `Nice! *${data.name}*! What do you sell or what service do you offer?`);
+        }
+        
         return;
     }
 
     if (ctx.onboarding_step === 'ask_description') {
         const description = cleanBusinessDescription(text);
         if (!isUsefulBusinessDescription(description)) {
-            await wa.sendText(from, `I need the actual thing you sell or the service you offer.
-
-For example: "I am a tailor", "we sell shoes and bags", "phone accessories", or "event catering".`);
+            try {
+                const prompt = `You're Charlotte helping a new seller! Their answer about what they sell isn't clear. Ask them again nicely for what they actually sell/offer, give examples like "tailor", "food", "clothes"! Keep it short!`;
+                const reply = await ai.simpleReply(prompt, text);
+                await wa.sendText(from, reply);
+            } catch (err) {
+                await wa.sendText(from, `Please tell me what you actually sell or offer! Like "tailor" or "food"!`);
+            }
             return;
         }
 
@@ -314,14 +368,24 @@ For example: "I am a tailor", "we sell shoes and bags", "phone accessories", or 
         data.category = inferOnboardingCategory(description);
         ctx.onboarding_step = 'ask_flexibility';
         await db.updateConversation(business.id, from, { context: ctx });
-        await wa.sendText(from, `Got it. I will set this up as *${data.category}*.
-
-How flexible should pricing be with customers?`);
-        await wa.sendQuickReplies(from, 'Choose the style that matches how you sell:', [
-            { title: 'Strict' },
-            { title: 'Moderate' },
-            { title: 'Flexible' }
-        ]);
+        
+        try {
+            const reply = await ai.simpleReply(ai.buildSellerOnboardingPrompt('ask_flexibility', data, business), text);
+            await wa.sendText(from, reply);
+            await wa.sendQuickReplies(from, 'Quick options:', [
+                { title: 'Strict' },
+                { title: 'Moderate' },
+                { title: 'Flexible' }
+            ]);
+        } catch (err) {
+            await wa.sendText(from, `Got it! Now, how flexible should pricing be? Strict / Moderate / Flexible?`);
+            await wa.sendQuickReplies(from, 'Quick options:', [
+                { title: 'Strict' },
+                { title: 'Moderate' },
+                { title: 'Flexible' }
+            ]);
+        }
+        
         return;
     }
 
@@ -339,13 +403,25 @@ How flexible should pricing be with customers?`);
 
     const flex = text.toLowerCase();
     if (!/(strict|moderate|flexible)/.test(flex)) {
-        await wa.sendText(from, `For pricing, choose one of these:
-
-*Strict* - small or no discounts.
-*Moderate* - balanced negotiation.
-*Flexible* - more room to close sales.
-
-Which one should Charlotte use?`);
+        try {
+            const reply = await ai.simpleReply(
+                `You're Charlotte helping a new seller! They didn't pick one of the 3 options: Strict, Moderate, Flexible. Ask them again clearly to choose one of those 3! Keep it friendly and short!`,
+                text
+            );
+            await wa.sendText(from, reply);
+            await wa.sendQuickReplies(from, 'Quick options:', [
+                { title: 'Strict' },
+                { title: 'Moderate' },
+                { title: 'Flexible' }
+            ]);
+        } catch (err) {
+            await wa.sendText(from, `Please choose: Strict, Moderate, or Flexible!`);
+            await wa.sendQuickReplies(from, 'Quick options:', [
+                { title: 'Strict' },
+                { title: 'Moderate' },
+                { title: 'Flexible' }
+            ]);
+        }
         return;
     }
 
@@ -384,9 +460,21 @@ Which one should Charlotte use?`);
     await db.updateConversation(business.id, from, { context: ctx });
 
     const dashboardUrl = `${APP_PUBLIC_URL}/dashboard/setup?token=${updated.setup_token}&biz=${updated.id}`;
-    await wa.sendText(from,
-        `Great! *${updated.name}* is ready for dashboard setup.\n\nSeller code: *${updated.code}*\nCategory: *${updated.category}*\n\nFinish onboarding here:\n${dashboardUrl}\n\nWhen you're done, return to WhatsApp and say hi so I can welcome you and help you test the store.`
-    );
+    try {
+        const finalReply = await ai.simpleReply(
+            `You are Charlotte! The seller just finished the initial setup! Congratulate them warmly!
+            Tell them their seller code: ${updated.code}
+            Give them the dashboard link: ${dashboardUrl}
+            Tell them to finish setup there and come say hi when done!
+            Keep it short, friendly, casual! 1 emoji max!`,
+            ''
+        );
+        await wa.sendText(from, finalReply);
+    } catch (err) {
+        await wa.sendText(from,
+            `Great! *${updated.name}* is ready! Your seller code is *${updated.code}*! Finish setup here: ${dashboardUrl}. Come say hi when done!`
+        );
+    }
 }
 
 function buildSellerCredentialReminder(business) {
