@@ -506,12 +506,7 @@ async function handleNewCustomer(from, text) {
     if (business) {
         await db.bindCustomerToBusiness(from, business.id);
         await db.getConversation(business.id, from);
-        await wa.sendText(from, `Welcome to *${business.name}*.\n\n${business.description || ''}\n\nYou can ask for the menu, prices, photos, or just tell me what you want.`);
-        return;
-    }
-
-    if (isPlatformQuestion(lower) || /^(hi|hello|hey|good morning|good afternoon|good evening|good day)\b/.test(lower)) {
-        await wa.sendText(from, PLATFORM_INTRO);
+        await wa.sendText(from, `Welcome to *${business.name}*! 👋\n\n${business.description || ''}`);
         return;
     }
 
@@ -527,32 +522,18 @@ async function handleNewCustomer(from, text) {
     }
 
     if (looksLikeSellerCode(text)) {
-        await wa.sendText(from, `I could not find that seller code on Chat2Buy.
-
-Please recheck the code and send it again. If you want to set up your own store instead, type *SELL*.`);
+        await wa.sendText(from, `I could not find that seller code. Please recheck and send it again, or type *SELL* to set up your own store.`);
         return;
     }
 
-    // Handle casual conversation for new customers
-    if (/^(how.*day|how.*going|how.*are.*you|how.*doing|how.*far)$/i.test(lower)) {
-        await wa.sendText(from, `I am doing well, thank you. Welcome to Chat2Buy.
-
-You can send a seller code to shop from a business, or type *SELL* if you want me to set up your own AI sales assistant.`);
-        return;
+    // Use AI for all other platform interactions
+    try {
+        const reply = await ai.simpleReply(ai.buildPlatformPrompt(), text);
+        await wa.sendText(from, reply);
+    } catch (err) {
+        console.error('[Webhook] Platform AI error:', err);
+        await wa.sendText(from, PLATFORM_INTRO);
     }
-
-    if (/(weather|rain|sun|hot|cold|climate|temperature)/.test(lower)) {
-        await wa.sendText(from, `I may not have your live weather from here, but I hope the day is treating you well.
-
-This is Chat2Buy. Send a seller code to shop, or type *SELL* to create your own store assistant.`);
-        return;
-    }
-
-    await wa.sendText(from, `I hear you.
-
-This is *Chat2Buy*, a WhatsApp platform for buying from stores and setting up AI sales assistants for businesses.
-
-Send a seller code if you have one, or type *SELL* to create your own store.`);
 }
 
 async function handleCustomerMessage(from, text, binding) {
@@ -568,27 +549,9 @@ async function handleCustomerMessage(from, text, binding) {
     if (['confirm', 'yes confirm', 'go ahead', 'pay', 'send payment link', 'i want to pay'].includes(lower)) {
         if (convo.stage === 'confirming' || convo.stage === 'quoting') {
             await processOrderConfirmation(from, convo, business, policy);
-        } else {
-            await wa.sendText(from, 'No order to confirm yet. Tell me what you want and I will put it together.');
         }
         return;
     }
-
-    // Handle casual conversation and general questions
-    if (/^(how.*day|how.*going|how.*are.*you|how.*doing|how.*far)$/i.test(lower)) {
-        await wa.sendText(from, `Thank you for asking! ${business.name} is doing great. How can I assist you with shopping today?`);
-        await appendHistory(businessId, from, convo, text, '[casual conversation reply]');
-        return;
-    }
-
-    if (/(switch|change seller|new seller|different store|shop somewhere else)/.test(lower)) {
-        await db.touchCustomerBinding(from, businessId);
-        await wa.sendText(from, `Sure, you can switch to shop with a different seller. Enter another seller code, or type SELL to set up your own store.`);
-        return;
-    }
-
-    const handledFast = await tryFastCustomerReply({ from, text, lower, business, catalog, policy, convo, businessId });
-    if (handledFast) return;
 
     await db.touchCustomerBinding(from, businessId);
 
